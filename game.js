@@ -15,13 +15,15 @@ const gameState = {
     board: ['', '', '', '', '', '', '', '', ''],
     currentPlayer: 'X',
     gameMode: 'ai', // 'ai' or '2p'
-    gameActive: true,
     scores: {
         X: 0,
         O: 0,
         draws: 0
     },
-    winningLine: null
+    winningLine: null,
+    moveHistory: [], // Track move order for infinite gameplay
+    maxMoves: 9, // Maximum moves before removing oldest
+    isProcessing: false // Prevent multiple simultaneous moves
 };
 
 // Winning combinations
@@ -77,47 +79,99 @@ function handleCellClick(event) {
     const cell = event.target;
     const index = parseInt(cell.getAttribute('data-index'));
     
-    // Validate move
-    if (!gameState.gameActive || gameState.board[index] !== '') {
+    // Prevent multiple simultaneous moves
+    if (gameState.isProcessing) {
         return;
     }
     
-    // Make move
+    // Validate move - only check if cell is empty
+    if (gameState.board[index] !== '') {
+        return;
+    }
+    
+    // Don't allow clicks during AI turn
+    if (gameState.gameMode === 'ai' && gameState.currentPlayer === 'O') {
+        return;
+    }
+    
+    // Make player move
     makeMove(index);
     
-    // Check game status
-    checkGameStatus();
+    // Check if player won
+    if (checkGameStatus()) {
+        return; // Game ended, but can continue after reset
+    }
     
-    // AI turn (if in AI mode and game still active)
-    if (gameState.gameMode === 'ai' && gameState.gameActive && gameState.currentPlayer === 'O') {
-        // Disable board during AI thinking
-        gameState.gameActive = false;
-        
+    // AI turn in AI mode
+    if (gameState.gameMode === 'ai' && gameState.currentPlayer === 'O') {
+        gameState.isProcessing = true;
         setTimeout(() => {
             const aiMove = ai.getBestMove(gameState.board);
-            makeMove(aiMove);
-            checkGameStatus();
-            gameState.gameActive = true;
-        }, 300); // AI thinking delay for natural feel
+            if (aiMove !== -1 && gameState.board[aiMove] === '') {
+                makeMove(aiMove);
+                checkGameStatus();
+            }
+            gameState.isProcessing = false;
+        }, 300);
     }
 }
 
 // Make a move
 function makeMove(index) {
+    // Check if board is full (9 moves made)
+    if (gameState.moveHistory.length >= gameState.maxMoves) {
+        // Remove the oldest move
+        const oldestMove = gameState.moveHistory.shift();
+        gameState.board[oldestMove.index] = '';
+        
+        // Update UI - remove from oldest cell with fade out animation
+        const oldCell = cells[oldestMove.index];
+        oldCell.classList.remove('oldest'); // Remove warning indicator
+        oldCell.style.opacity = '0.3';
+        
+        // Use a shorter timeout to avoid blocking AI
+        setTimeout(() => {
+            oldCell.textContent = '';
+            oldCell.classList.remove('filled', 'x', 'o');
+            oldCell.style.opacity = '1';
+        }, 150);
+    }
+    
     // Update board state
     gameState.board[index] = gameState.currentPlayer;
+    
+    // Track this move
+    gameState.moveHistory.push({
+        index: index,
+        player: gameState.currentPlayer
+    });
     
     // Update UI
     const cell = cells[index];
     cell.textContent = gameState.currentPlayer;
     cell.classList.add('filled', gameState.currentPlayer.toLowerCase());
     
+    // Highlight oldest move if board is getting full (8+ moves)
+    updateOldestMoveIndicator();
+    
     // Switch player
     gameState.currentPlayer = gameState.currentPlayer === 'X' ? 'O' : 'X';
     updateCurrentPlayerDisplay();
 }
 
-// Check game status (win/draw)
+// Update oldest move indicator
+function updateOldestMoveIndicator() {
+    // Remove all oldest indicators
+    cells.forEach(cell => cell.classList.remove('oldest'));
+    
+    // If we have 8+ moves, highlight the oldest one
+    if (gameState.moveHistory.length >= 8) {
+        const oldestIndex = gameState.moveHistory[0].index;
+        cells[oldestIndex].classList.add('oldest');
+    }
+}
+
+// Check game status (win only - no draws in infinite mode)
 function checkGameStatus() {
     // Check for winner
     for (let pattern of winPatterns) {
@@ -128,20 +182,23 @@ function checkGameStatus() {
             
             // Winner found
             handleWin(gameState.board[a], pattern);
-            return;
+            return true; // Return true to indicate game ended
         }
     }
     
-    // Check for draw
-    if (gameState.board.every(cell => cell !== '')) {
-        handleDraw();
-    }
+    // No draw check - game continues infinitely until someone wins!
+    return false; // Game continues
 }
 
 // Handle win
 function handleWin(winner, pattern) {
     gameState.gameActive = false;
     gameState.winningLine = pattern;
+    
+    // Trigger star explosion effect
+    if (window.triggerStarExplosion) {
+        window.triggerStarExplosion();
+    }
     
     // Update score
     gameState.scores[winner]++;
@@ -220,11 +277,13 @@ function resetGame() {
     gameState.currentPlayer = 'X';
     gameState.gameActive = true;
     gameState.winningLine = null;
+    gameState.moveHistory = []; // Clear move history
     
     // Clear UI
     cells.forEach(cell => {
         cell.textContent = '';
         cell.className = 'cell';
+        cell.style.opacity = '1'; // Reset opacity
     });
     
     // Clear status
